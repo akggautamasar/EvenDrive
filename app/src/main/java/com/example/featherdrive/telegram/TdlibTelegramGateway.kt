@@ -88,8 +88,6 @@ class TdlibTelegramGateway(
             }
         }
 
-        td.activeUploadStreams[virtualKey] = progressStream
-
         val inputFile = TdApi.InputFileGenerated(
             virtualKey,
             "raw_copy",
@@ -97,32 +95,35 @@ class TdlibTelegramGateway(
         )
 
         val content = TdApi.InputMessageDocument(
-            inputFile,
-            null,
-            true, // disableContentTypeDetection (prevents video re-encoding)
+            TdApi.InputDocument(inputFile, null, true),
             null
         )
 
-        val tempMsg = td.send(
-            TdApi.SendMessage(
-                channelId,
-                null,
-                null,
-                null,
-                null,
-                content
+        td.activeUploadStreams[virtualKey] = progressStream
+        try {
+            val tempMsg = td.send(
+                TdApi.SendMessage(
+                    channelId,
+                    null,
+                    null,
+                    null,
+                    null,
+                    content
+                )
             )
-        )
 
-        val finalMsg = td.registerPendingSend(tempMsg.id).await()
-        val uploadedDoc = (finalMsg.content as TdApi.MessageDocument).document.document
+            val finalMsg = td.registerPendingSend(tempMsg.id).await()
+            val uploadedDoc = (finalMsg.content as TdApi.MessageDocument).document.document
 
-        td.sendFireAndForget(TdApi.DeleteFile(uploadedDoc.id))
+            td.sendFireAndForget(TdApi.DeleteFile(uploadedDoc.id))
 
-        UploadedTelegramDoc(
-            messageId = finalMsg.id,
-            documentId = uploadedDoc.id
-        )
+            UploadedTelegramDoc(
+                messageId = finalMsg.id,
+                documentId = uploadedDoc.id
+            )
+        } finally {
+            td.activeUploadStreams.remove(virtualKey)
+        }
     }
 
     override suspend fun updatePinnedIndexJson(channelId: Long, jsonBytes: ByteArray) {

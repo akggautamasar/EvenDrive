@@ -2,10 +2,14 @@ package com.example.featherdrive.telegram
 
 import android.content.Context
 import android.os.Build
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -39,6 +43,7 @@ class TdlibClientManager(
     val authState: StateFlow<TelegramAuthState> = _authState
 
     val activeUploadStreams = ConcurrentHashMap<String, InputStream>()
+    private val fileGenerations = ConcurrentHashMap<Long, Job>()
     private val pendingMessageSends = ConcurrentHashMap<Long, CompletableDeferred<TdApi.Message>>()
 
     val client: Client = Client.create(
@@ -87,7 +92,7 @@ class TdlibClientManager(
             is TdApi.UpdateAuthorizationState -> onAuthStateChanged(obj.authorizationState)
 
             is TdApi.UpdateFileGenerationStart -> {
-                ioScope.launch {
+                val generation = ioScope.launch(start = CoroutineStart.LAZY) {
                     val stream = activeUploadStreams[obj.originalPath]
                     if (stream == null) {
                         sendFireAndForget(
@@ -102,12 +107,16 @@ class TdlibClientManager(
                         File(obj.destinationPath).outputStream().use { out ->
                             val buf = ByteArray(256 * 1024)
                             while (true) {
+                                ensureActive()
                                 val read = stream.read(buf)
                                 if (read <= 0) break
                                 out.write(buf, 0, read)
                             }
                         }
+                        ensureActive()
                         sendFireAndForget(TdApi.FinishFileGeneration(obj.generationId, null))
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         sendFireAndForget(
                             TdApi.FinishFileGeneration(
@@ -117,10 +126,13 @@ class TdlibClientManager(
                         )
                     }
                 }
+                fileGenerations[obj.generationId] = generation
+                generation.invokeOnCompletion { fileGenerations.remove(obj.generationId, generation) }
+                generation.start()
             }
 
             is TdApi.UpdateFileGenerationStop -> {
-                activeUploadStreams.remove(obj.originalPath)
+                fileGenerations.remove(obj.generationId)?.cancel()
             }
 
             is TdApi.UpdateMessageSendSucceeded -> {
