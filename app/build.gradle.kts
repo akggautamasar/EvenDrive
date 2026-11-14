@@ -18,7 +18,7 @@ android {
 
         // Replace with your credentials from https://my.telegram.org
         buildConfigField("int", "TG_API_ID", providers.environmentVariable("TG_API_ID").orElse("0").get())
-        buildConfigField("String", "TG_API_HASH", "\\\"" + providers.environmentVariable("TG_API_HASH").orElse("").get() + "\\\"")
+        buildConfigField("String", "TG_API_HASH", "\"" + providers.environmentVariable("TG_API_HASH").orElse("").get() + "\"")
     }
 
     buildTypes {
