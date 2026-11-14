@@ -128,7 +128,7 @@ class TdlibTelegramGateway(
     override suspend fun updatePinnedIndexJson(channelId: Long, jsonBytes: ByteArray) {
         val uploaded = uploadDocumentStream(
             channelId = channelId,
-            fileName = "feather_index.json",
+            fileName = "even_index.json",
             mimeType = "application/json",
             partSize = jsonBytes.size.toLong(),
             stream = jsonBytes.inputStream(),
@@ -146,11 +146,7 @@ class TdlibTelegramGateway(
 
     override suspend fun downloadPinnedIndexJson(channelId: Long): ByteArray? =
         withContext(Dispatchers.IO) {
-            val chat = runCatching { td.send(TdApi.GetChat(channelId)) }.getOrNull() ?: return@withContext null
-            val pinnedId = chat.pinnedMessageId
-            if (pinnedId == 0L) return@withContext null
-
-            val msg = runCatching { td.send(TdApi.GetMessage(channelId, pinnedId)) }.getOrNull()
+            val msg = runCatching { td.send(TdApi.GetChatPinnedMessage(channelId)) }.getOrNull()
                 ?: return@withContext null
             val doc = (msg.content as? TdApi.MessageDocument)?.document?.document ?: return@withContext null
 
