@@ -106,7 +106,7 @@ class TdlibTelegramGateway(
         val tempMsg = td.send(
             TdApi.SendMessage(
                 channelId,
-                0L,
+                null,
                 null,
                 null,
                 null,
