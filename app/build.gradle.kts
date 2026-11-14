@@ -73,5 +73,5 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     // Telegram TDLib Android Client
-    implementation("com.github.tdlibx:td:1.8.29")
+    implementation("io.github.tdlib-android:core:0.1.1")
 }
