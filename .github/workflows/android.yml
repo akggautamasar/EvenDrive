@@ -1,0 +1,55 @@
+name: Build EvenDrive APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Verify Telegram credentials
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          test -n "$TG_API_ID" || { echo "Missing TG_API_ID repository secret"; exit 1; }
+          test -n "$TG_API_HASH" || { echo "Missing TG_API_HASH repository secret"; exit 1; }
+      - name: Build installable debug APK
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: gradle --no-daemon assembleDebug
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EvenDrive-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - name: Publish GitHub prerelease
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/*.apk EvenDrive-debug.apk
+          TAG="build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" EvenDrive-debug.apk --title "EvenDrive build ${GITHUB_RUN_NUMBER}" --notes "Automated test APK. Debug-signed; not a production-signed release." --prerelease --target "$GITHUB_SHA"
