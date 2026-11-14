@@ -1,4 +1,4 @@
-# Feather Drive (Telegram Zero-Disk Virtual Storage for Android)
+# EvenDrive (Telegram Zero-Disk Virtual Storage for Android)
 
 Stream multi-gigabyte videos and browse folders stored on Telegram directly on your Samsung Galaxy S24 (or any Android 8.0+ phone) with **0 bytes written to internal flash storage**.
 
