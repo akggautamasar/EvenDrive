@@ -15,5 +15,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "FeatherDrive"
+rootProject.name = "EvenDrive"
 include(":app")
