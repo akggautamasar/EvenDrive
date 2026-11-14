@@ -17,7 +17,7 @@ android {
         versionName = "1.0.0"
 
         // Replace with your credentials from https://my.telegram.org
-        buildConfigField("int", "TG_API_ID", "12345678")
+        buildConfigField("int", "TG_API_ID", providers.environmentVariable("TG_API_ID").orElse("0").get())
         buildConfigField("String", "TG_API_HASH", "\"your_telegram_api_hash\"")
     }
 
