@@ -3,6 +3,9 @@ package com.example.featherdrive.telegram
 import com.example.featherdrive.storage.TelegramStorageGateway
 import com.example.featherdrive.storage.UploadedTelegramDoc
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.drinkless.tdlib.TdApi
 import java.io.File
@@ -11,9 +14,13 @@ import java.io.InputStream
 import java.io.RandomAccessFile
 import java.util.UUID
 
+internal const val EVENDRIVE_UPLOAD_CAPTION = "Uploaded by EvenDrive"
+
 class TdlibTelegramGateway(
     private val td: TdlibClientManager
 ) : TelegramStorageGateway {
+
+    private val rangeReadLock = Mutex()
 
     override suspend fun getFileBytes(
         channelId: Long,
@@ -21,41 +28,51 @@ class TdlibTelegramGateway(
         offset: Long,
         limit: Int
     ): ByteArray = withContext(Dispatchers.IO) {
-        val msg = td.send(TdApi.GetMessage(channelId, messageId))
-        val docContent = msg.content as? TdApi.MessageDocument
-            ?: throw IOException("Message $messageId does not contain a document")
+        rangeReadLock.withLock {
+            val msg = td.send(TdApi.GetMessage(channelId, messageId))
+            val file = when (val content = msg.content) {
+                is TdApi.MessageDocument -> content.document.document
+                is TdApi.MessageVideo -> content.video.video
+                else -> throw IOException("Message $messageId does not contain a playable file")
+            }
+            val fileId = file.id
+            val totalFileSize = file.size.takeIf { it > 0 } ?: file.expectedSize
+            if (offset >= totalFileSize) return@withLock ByteArray(0)
 
-        val fileId = docContent.document.document.id
-        val totalFileSize = docContent.document.document.size
-        if (offset >= totalFileSize) return@withContext ByteArray(0)
+            val expectedBytes = minOf(limit.toLong(), totalFileSize - offset).toInt()
 
-        val expectedBytes = minOf(limit.toLong(), totalFileSize - offset).toInt()
-
-        try {
-            val downloadedFile = td.send(
-                TdApi.DownloadFile(
-                    fileId,
-                    32,
-                    offset,
-                    expectedBytes.toLong(),
-                    true
+            try {
+                val downloadedFile = td.send(
+                    TdApi.DownloadFile(
+                        fileId,
+                        32,
+                        offset,
+                        expectedBytes.toLong(),
+                        true
+                    )
                 )
-            )
 
-            val localPath = downloadedFile.local.path
-            if (localPath.isNullOrEmpty()) {
-                throw IOException("TDLib returned empty local path for fileId=$fileId")
-            }
+                val localPath = downloadedFile.local.path
+                if (localPath.isNullOrEmpty()) {
+                    throw IOException("TDLib returned empty local path for fileId=$fileId")
+                }
 
-            val buffer = ByteArray(expectedBytes)
-            RandomAccessFile(localPath, "r").use { raf ->
-                raf.seek(offset)
-                raf.readFully(buffer)
+                val buffer = ByteArray(expectedBytes)
+                RandomAccessFile(localPath, "r").use { raf ->
+                    raf.seek(offset)
+                    raf.readFully(buffer)
+                }
+                buffer
+            } finally {
+                // Immediately wipe transient disk chunk; RAM LruCache now holds it
+                withContext(NonCancellable) {
+                    try {
+                        td.send(TdApi.DeleteFile(fileId))
+                    } catch (_: IOException) {
+                        // Preserve the result of the range read if TDLib cannot clear its cache.
+                    }
+                }
             }
-            buffer
-        } finally {
-            // Immediately wipe transient disk chunk; RAM LruCache now holds it
-            td.sendFireAndForget(TdApi.DeleteFile(fileId))
         }
     }
 
@@ -96,12 +113,12 @@ class TdlibTelegramGateway(
 
         val content = TdApi.InputMessageDocument(
             TdApi.InputDocument(inputFile, null, true),
-            null
+            TdApi.FormattedText(EVENDRIVE_UPLOAD_CAPTION, emptyArray())
         )
 
         td.activeUploadStreams[virtualKey] = progressStream
         try {
-            val tempMsg = td.send(
+            val finalMsg = td.sendMessage(
                 TdApi.SendMessage(
                     channelId,
                     null,
@@ -112,7 +129,6 @@ class TdlibTelegramGateway(
                 )
             )
 
-            val finalMsg = td.registerPendingSend(tempMsg.id).await()
             val uploadedDoc = (finalMsg.content as TdApi.MessageDocument).document.document
 
             td.sendFireAndForget(TdApi.DeleteFile(uploadedDoc.id))

@@ -56,6 +56,12 @@ interface VfsDao {
     @Query("SELECT * FROM vfs_nodes WHERE nodeId = :nodeId LIMIT 1")
     suspend fun getNodeWithParts(nodeId: String): NodeWithParts?
 
+    @Query("SELECT EXISTS(SELECT 1 FROM telegram_parts WHERE channelId = :channelId AND messageId = :messageId)")
+    suspend fun hasMessage(channelId: Long, messageId: Long): Boolean
+
+    @Query("UPDATE vfs_nodes SET parentId = :parentId WHERE nodeId = :nodeId")
+    suspend fun moveNode(nodeId: String, parentId: String)
+
     @Query("SELECT * FROM vfs_nodes")
     suspend fun getAllNodes(): List<VfsNodeEntity>
 

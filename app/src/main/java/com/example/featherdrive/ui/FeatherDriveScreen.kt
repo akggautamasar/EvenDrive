@@ -153,6 +153,8 @@ private fun TelegramLoginScreen(
     }
 }
 
+private data class PendingFileTransfer(val node: VfsNodeEntity, val copy: Boolean)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VaultExplorerScreen(vm: FeatherDriveViewModel) {
@@ -163,6 +165,7 @@ private fun VaultExplorerScreen(vm: FeatherDriveViewModel) {
     val statusMessage by vm.statusMessage.collectAsState()
 
     var showNewFolderDialog by remember { mutableStateOf(false) }
+    var transfer by remember { mutableStateOf<PendingFileTransfer?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     BackHandler(enabled = folderStack.size > 1) {
@@ -210,6 +213,9 @@ private fun VaultExplorerScreen(vm: FeatherDriveViewModel) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { vm.refreshChannelVideos() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Sync channel videos")
+                    }
                     IconButton(onClick = { vm.restoreFromCloudIndex() }) {
                         Icon(Icons.Default.CloudSync, contentDescription = "Restore Index")
                     }
@@ -232,6 +238,28 @@ private fun VaultExplorerScreen(vm: FeatherDriveViewModel) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            transfer?.let { pending ->
+                ListItem(
+                    headlineContent = { Text(if (pending.copy) "Copy file" else "Move file") },
+                    supportingContent = {
+                        Text(pending.node.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Open the destination folder")
+                    },
+                    trailingContent = {
+                        Column {
+                            TextButton(
+                                enabled = pending.copy || pending.node.parentId != folderStack.last().nodeId,
+                                onClick = {
+                                    vm.transferFile(pending.node, pending.copy)
+                                    transfer = null
+                                }
+                            ) { Text(if (pending.copy) "Copy here" else "Move here") }
+                            TextButton(onClick = { transfer = null }) { Text("Cancel") }
+                        }
+                    }
+                )
+            }
+
             uploadProgress?.let { progress ->
                 UploadProgressBanner(progress)
             }
@@ -259,7 +287,9 @@ private fun VaultExplorerScreen(vm: FeatherDriveViewModel) {
                                 if (node.isDir) vm.openFolder(node)
                                 else vm.streamFileInExternalPlayer(node)
                             },
-                            onDelete = { vm.deleteNode(node) }
+                            onDelete = { vm.deleteNode(node) },
+                            onMove = { transfer = PendingFileTransfer(node, copy = false) },
+                            onCopy = { transfer = PendingFileTransfer(node, copy = true) }
                         )
                     }
                 }
@@ -346,8 +376,11 @@ private fun VfsNodeRow(
     node: VfsNodeEntity,
     formattedSize: String,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onMove: () -> Unit,
+    onCopy: () -> Unit
 ) {
+    var actionsOpen by remember { mutableStateOf(false) }
     ListItem(
         modifier = Modifier.clickable(onClick = onClick),
         leadingContent = {
@@ -377,11 +410,26 @@ private fun VfsNodeRow(
             )
         },
         trailingContent = {
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Default.DeleteOutline,
-                    contentDescription = "Remove from index"
-                )
+            Box {
+                IconButton(onClick = { actionsOpen = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Actions for ${node.name}")
+                }
+                DropdownMenu(expanded = actionsOpen, onDismissRequest = { actionsOpen = false }) {
+                    if (!node.isDir) {
+                        DropdownMenuItem(text = { Text("Move to folder") }, onClick = {
+                            actionsOpen = false
+                            onMove()
+                        })
+                        DropdownMenuItem(text = { Text("Copy to folder") }, onClick = {
+                            actionsOpen = false
+                            onCopy()
+                        })
+                    }
+                    DropdownMenuItem(text = { Text("Remove from index") }, onClick = {
+                        actionsOpen = false
+                        onDelete()
+                    })
+                }
             }
         }
     )

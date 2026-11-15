@@ -52,7 +52,7 @@ class TdlibClientManager(
         { err -> err?.printStackTrace() }
     )
 
-    suspend fun <T : TdApi.Object> send(query: TdApi.Function<T>): T =
+    suspend fun <T : TdApi.Object> send(query: TdApi.Function<T>, onSuccess: (T) -> Unit = {}): T =
         suspendCancellableCoroutine { cont ->
             client.send(query) { result ->
                 if (!cont.isActive) return@send
@@ -60,7 +60,9 @@ class TdlibClientManager(
                     cont.resumeWithException(IOException("TDLib [${result.code}]: ${result.message}"))
                 } else {
                     @Suppress("UNCHECKED_CAST")
-                    cont.resume(result as T)
+                    val value = result as T
+                    onSuccess(value)
+                    cont.resume(value)
                 }
             }
         }
@@ -81,10 +83,19 @@ class TdlibClientManager(
         send(TdApi.CheckAuthenticationPassword(password))
     }
 
-    fun registerPendingSend(tempMessageId: Long): CompletableDeferred<TdApi.Message> {
-        val deferred = CompletableDeferred<TdApi.Message>()
-        pendingMessageSends[tempMessageId] = deferred
-        return deferred
+    suspend fun sendMessage(query: TdApi.SendMessage): TdApi.Message {
+        val pending = CompletableDeferred<TdApi.Message>()
+        try {
+            val message = send(query) { result ->
+                if (result.sendingState != null) {
+                    pendingMessageSends[result.id] = pending
+                    pending.invokeOnCompletion { pendingMessageSends.remove(result.id, pending) }
+                }
+            }
+            return if (message.sendingState == null) message else pending.await()
+        } finally {
+            pending.cancel()
+        }
     }
 
     private fun handleUpdate(obj: TdApi.Object) {

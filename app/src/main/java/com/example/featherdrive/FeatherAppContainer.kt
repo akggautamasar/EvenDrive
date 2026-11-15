@@ -6,6 +6,7 @@ import com.example.featherdrive.storage.MultiPartTelegramFetcher
 import com.example.featherdrive.storage.TelegramRangeChunkCache
 import com.example.featherdrive.storage.TelegramUploadManager
 import com.example.featherdrive.storage.VfsDatabase
+import com.example.featherdrive.telegram.ChannelVideoSync
 import com.example.featherdrive.telegram.TdlibClientManager
 import com.example.featherdrive.telegram.TdlibTelegramGateway
 import org.drinkless.tdlib.TdApi
@@ -31,6 +32,7 @@ class FeatherAppContainer private constructor(context: Context) {
         apiHash = BuildConfig.TG_API_HASH
     )
 
+    val channelVideoSync = ChannelVideoSync(tdManager, db, prefs)
     val gateway = TdlibTelegramGateway(tdManager)
     val fetcher = MultiPartTelegramFetcher(db.vfsDao(), gateway)
     val chunkCache = TelegramRangeChunkCache(fetcher)
@@ -43,7 +45,7 @@ class FeatherAppContainer private constructor(context: Context) {
         val chats = tdManager.send(TdApi.GetChats(TdApi.ChatListMain(), 100))
         for (chatId in chats.chatIds) {
             val chat = runCatching { tdManager.send(TdApi.GetChat(chatId)) }.getOrNull()
-            if (chat?.title == "Feather Vault" && chat.type is TdApi.ChatTypeSupergroup) {
+            if (chat?.title == "Feather Vault" && (chat.type as? TdApi.ChatTypeSupergroup)?.isChannel == true) {
                 prefs.edit().putLong("vault_channel_id", chat.id).apply()
                 return chat.id
             }
@@ -69,7 +71,7 @@ class FeatherAppContainer private constructor(context: Context) {
         val channelId = getOrCreateVaultChannelId()
         return TelegramUploadManager(
             context = appContext,
-            vfsDao = db.vfsDao(),
+            db = db,
             telegram = gateway,
             storageChannelId = channelId
         )

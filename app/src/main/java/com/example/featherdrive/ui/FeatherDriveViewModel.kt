@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import androidx.room.withTransaction
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.featherdrive.FeatherAppContainer
@@ -11,10 +12,14 @@ import com.example.featherdrive.storage.TelegramUploadManager
 import com.example.featherdrive.storage.UploadProgress
 import com.example.featherdrive.storage.VfsNodeEntity
 import com.example.featherdrive.telegram.TelegramAuthState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 data class FolderCrumb(val nodeId: String, val title: String)
 
@@ -39,17 +44,88 @@ class FeatherDriveViewModel(application: Application) : AndroidViewModel(applica
 
     init {
         viewModelScope.launch {
-            authState.collect { state ->
-                if (state is TelegramAuthState.Ready) {
-                    if (uploadManager == null) {
-                        uploadManager = container.createUploadManager().also { mgr ->
-                            launch {
-                                mgr.progress.collect { _uploadProgress.value = it }
+            authState.collectLatest { state ->
+                if (state !is TelegramAuthState.Ready) return@collectLatest
+
+                refreshCurrentFolder()
+                while (true) {
+                    try {
+                        if (uploadManager == null) {
+                            val manager = container.createUploadManager()
+                            uploadManager = manager
+                            viewModelScope.launch {
+                                manager.progress.collect { _uploadProgress.value = it }
                             }
                         }
+                        syncChannelVideos()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        _statusMessage.value = "Channel sync failed: ${e.message}"
                     }
-                    refreshCurrentFolder()
+                    delay(15_000)
                 }
+            }
+        }
+    }
+
+    private suspend fun syncChannelVideos(): Int {
+        try {
+            return container.channelVideoSync.sync(container.getOrCreateVaultChannelId())
+        } finally {
+            refreshCurrentFolder()
+        }
+    }
+
+    fun refreshChannelVideos() = viewModelScope.launch {
+        if (uploadManager == null) return@launch
+        try {
+            val count = syncChannelVideos()
+            _statusMessage.value = when (count) {
+                0 -> "No new channel videos"
+                1 -> "Added 1 channel video to Feather Vault"
+                else -> "Added $count channel videos to Feather Vault"
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _statusMessage.value = "Channel sync failed: ${e.message}"
+        }
+    }
+
+    fun transferFile(node: VfsNodeEntity, copy: Boolean) = viewModelScope.launch {
+        val manager = uploadManager ?: return@launch
+        val folder = _folderStack.value.last()
+        val dao = container.db.vfsDao()
+        var savedLocally = false
+        try {
+            container.db.withTransaction {
+                val source = requireNotNull(dao.getNodeWithParts(node.nodeId)) { "File no longer exists" }
+                require(!source.node.isDir && source.parts.isNotEmpty()) { "File is unavailable" }
+                require(folder.nodeId == "root" || dao.getNode(folder.nodeId)?.isDir == true) {
+                    "Destination folder no longer exists"
+                }
+                if (copy) {
+                    val newId = UUID.randomUUID().toString()
+                    dao.saveFileWithParts(
+                        source.node.copy(nodeId = newId, parentId = folder.nodeId),
+                        source.parts.map { it.copy(id = 0, nodeId = newId) }
+                    )
+                } else {
+                    dao.moveNode(node.nodeId, folder.nodeId)
+                }
+            }
+            savedLocally = true
+            refreshCurrentFolder()
+            manager.syncIndexToChannel()
+            _statusMessage.value = if (copy) "Copied to ${folder.title}" else "Moved to ${folder.title}"
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _statusMessage.value = if (savedLocally) {
+                "Saved on this device. Telegram index sync failed: ${e.message}"
+            } else {
+                "File transfer failed: ${e.message}"
             }
         }
     }
@@ -85,7 +161,8 @@ class FeatherDriveViewModel(application: Application) : AndroidViewModel(applica
 
     fun refreshCurrentFolder() = viewModelScope.launch {
         val currentId = _folderStack.value.last().nodeId
-        _items.value = container.db.vfsDao().getChildren(currentId)
+        val children = container.db.vfsDao().getChildren(currentId)
+        if (currentId == _folderStack.value.last().nodeId) _items.value = children
     }
 
     fun createFolder(name: String) = viewModelScope.launch {

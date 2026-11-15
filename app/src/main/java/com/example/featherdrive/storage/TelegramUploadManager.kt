@@ -4,10 +4,13 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.util.UUID
@@ -23,7 +26,7 @@ data class UploadProgress(
 
 class TelegramUploadManager(
     private val context: Context,
-    private val vfsDao: VfsDao,
+    private val db: VfsDatabase,
     private val telegram: TelegramStorageGateway,
     private val storageChannelId: Long
 ) {
@@ -31,6 +34,9 @@ class TelegramUploadManager(
         // 1900 MiB = 1,992,294,400 bytes (< 2 GB Telegram limit & divisible by 1 MiB)
         const val MAX_PART_BYTES = 1900L * 1024L * 1024L
     }
+
+    private val vfsDao = db.vfsDao()
+    private val indexLock = Mutex()
 
     private val _progress = MutableStateFlow<UploadProgress?>(null)
     val progress: StateFlow<UploadProgress?> = _progress
@@ -123,17 +129,19 @@ class TelegramUploadManager(
         node
     }
 
-    suspend fun syncIndexToChannel() {
-        val jsonBytes = ChannelIndexSync.exportToJson(
-            nodes = vfsDao.getAllNodes(),
-            parts = vfsDao.getAllParts()
-        )
+    suspend fun syncIndexToChannel() = indexLock.withLock {
+        val jsonBytes = db.withTransaction {
+            ChannelIndexSync.exportToJson(
+                nodes = vfsDao.getAllNodes(),
+                parts = vfsDao.getAllParts()
+            )
+        }
         telegram.updatePinnedIndexJson(storageChannelId, jsonBytes)
     }
 
-    suspend fun restoreIndexFromChannel(): Boolean = withContext(Dispatchers.IO) {
-        val jsonBytes = telegram.downloadPinnedIndexJson(storageChannelId) ?: return@withContext false
-        ChannelIndexSync.importFromJson(jsonBytes, vfsDao)
+    suspend fun restoreIndexFromChannel(): Boolean = indexLock.withLock {
+        val jsonBytes = telegram.downloadPinnedIndexJson(storageChannelId) ?: return@withLock false
+        db.withTransaction { ChannelIndexSync.importFromJson(jsonBytes, vfsDao) }
         true
     }
 
